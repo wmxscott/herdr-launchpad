@@ -1,0 +1,89 @@
+id = "launchpad"
+name = "Launchpad"
+version = "0.1.0"
+min_herdr_version = "0.7.4"
+description = "An icon picker and keybindings that open your own tools, like lazygit or nvim, in popups."
+platforms = ["linux", "macos"]
+
+# What each slot and the picker open is set in config.toml in
+# `herdr plugin config-dir launchpad`, not here: herdr reads panes and actions
+# from this manifest only, so they stay generic. See the README.
+#
+# Pane commands are relative to the plugin root. Opening them with --cwd
+# would break that, so bin/launchpad changes directory itself.
+
+[[panes]]
+id = "picker"
+title = "launchpad"
+placement = "popup"
+width = 40
+height = 12
+command = ["sh", "bin/launchpad", "picker"]
+
+[[panes]]
+id = "run"
+title = "launchpad"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["sh", "bin/launchpad", "run"]
+
+[[actions]]
+id = "open"
+title = "Open the launchpad"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "open"]
+
+[[actions]]
+id = "slot-1"
+title = "Open launchpad slot 1"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "1"]
+
+[[actions]]
+id = "slot-2"
+title = "Open launchpad slot 2"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "2"]
+
+[[actions]]
+id = "slot-3"
+title = "Open launchpad slot 3"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "3"]
+
+[[actions]]
+id = "slot-4"
+title = "Open launchpad slot 4"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "4"]
+
+[[actions]]
+id = "slot-5"
+title = "Open launchpad slot 5"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "5"]
+
+[[actions]]
+id = "slot-6"
+title = "Open launchpad slot 6"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "6"]
+
+[[actions]]
+id = "slot-7"
+title = "Open launchpad slot 7"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "7"]
+
+[[actions]]
+id = "slot-8"
+title = "Open launchpad slot 8"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "8"]
+
+[[actions]]
+id = "slot-9"
+title = "Open launchpad slot 9"
+contexts = ["workspace"]
+command = ["sh", "bin/launchpad", "slot", "9"]

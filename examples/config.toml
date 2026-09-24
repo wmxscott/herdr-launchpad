@@ -1,0 +1,59 @@
+# Launchpad config. Copy it into the plugin's config directory:
+#
+#   cp examples/config.toml "$(herdr plugin config-dir launchpad)/config.toml"
+#
+# Launchpad reads it every time it opens, so edits apply straight away.
+# Icons below are Nerd Font glyphs; any character or emoji works too.
+
+# "auto" follows theme-monitor, then the macOS appearance, then falls back to
+# dark. Set "dark" or "light" to pin it.
+theme = "auto"
+
+[[entries]]
+id = "lazygit"
+title = "lazygit"
+command = ["lazygit"]
+icon = "\ue702"
+color = "green"
+width = "95%"
+height = "95%"
+slot = 1
+
+[[entries]]
+id = "nvim"
+title = "nvim"
+command = ["nvim"]
+icon = "\ue7c5"
+color = "teal"
+width = "95%"
+height = "95%"
+slot = 2
+
+[[entries]]
+id = "gh-dash"
+title = "gh dash"
+command = ["gh", "dash"]
+icon = "\uf09b"
+color = "blue"
+width = "95%"
+height = "95%"
+slot = 3
+
+[[entries]]
+id = "btop"
+title = "btop"
+command = ["btop"]
+icon = "\uf4bc"
+color = "peach"
+width = "90%"
+height = "90%"
+
+# A string command runs with sh -c.
+[[entries]]
+id = "shell"
+title = "scratch shell"
+command = 'exec "${SHELL:-sh}"'
+icon = "\uf489"
+color = "mauve"
+width = "80%"
+height = "60%"

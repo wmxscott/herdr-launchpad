@@ -56,8 +56,17 @@ def test_palette_for():
 def test_picker_size_fits_the_rows():
     width, height = picker_size(Config(entries=tuple(ENTRIES)), KEYS)
     # icon + space + "scratch shell" + gap + "prefix+G" + chrome
-    assert width == 1 + 1 + 13 + 8 + 8 + 5
+    assert width == 1 + 1 + 13 + 8 + 8 + 8
     assert height == 8
+
+
+def test_picker_leaves_fzf_room_for_whole_rows():
+    # herdr gives the popup's terminal width - 3 columns, and fzf shows rows
+    # up to 3 columns narrower than that without cutting them off.
+    entries = [Entry("u", "update dotfiles", ("up",), icon="\ue702", slot=1)]
+    width, _ = picker_size(Config(entries=tuple(entries)), {1: "prefix+G"})
+    row = render_rows(entries, {1: "prefix+G"}, LATTE, color=False)[0].split("\t")[0]
+    assert len(row) <= width - 6
 
 
 def test_picker_size_grows_with_entries():

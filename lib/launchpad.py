@@ -11,6 +11,11 @@ Subcommands, each wired up in herdr-plugin.toml:
   picker       pane:   the fzf icon picker
   run          pane:   exec the entry named by LAUNCHPAD_ENTRY
   launch ID    helper: open entry ID once the picker's popup has closed
+
+The actions do the slow work, reading config and asking herdr for the agent
+session, before they open a popup, and hand the results to it in the
+environment. A popup's process then only has to start fzf or exec the tool, so
+it never shows an empty frame while Python works.
 """
 
 from __future__ import annotations
@@ -26,11 +31,14 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DEFAULT_PLUGIN_ID = "launchpad"
 CONFIG_NAME = "config.toml"
 SLOTS = range(1, 10)
 ENTRY_ENV = "LAUNCHPAD_ENTRY"
+SESSION_ENV = "LAUNCHPAD_SESSION"
+ROWS_ENV = "LAUNCHPAD_ROWS"
+PRIVATE_ENV = (ENTRY_ENV, SESSION_ENV, ROWS_ENV)
 README = "https://github.com/wmxscott/herdr-launchpad#configuration"
 
 ID_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -78,7 +86,10 @@ COLOR_NAMES = frozenset(LATTE) - {"text", "overlay0"}
 
 RESET = "\x1b[0m"
 KEY_GAP = 8
-PICKER_CHROME_WIDTH = 5  # popup border (2), terminal scrollbar column (1), fzf gutter (2)
+# herdr's popup takes 3 columns (border and a scrollbar column), and fzf 3 more
+# (pointer, marker and its own scrollbar column). The rest is slack for icons
+# that a font draws two cells wide.
+PICKER_CHROME_WIDTH = 8
 PICKER_CHROME_HEIGHT = 5  # popup border (2), prompt, separator, header
 PICKER_MIN_WIDTH = 36
 PICKER_MIN_HEIGHT = 8
@@ -603,23 +614,87 @@ def fail_in_popup(message: str) -> int:
     return 1
 
 
-def visible_entries(config: Config, context: dict) -> list[Entry]:
-    if not any(e.requires_session for e in config.entries):
-        return list(config.entries)
-    has_session = agent_session(context) is not None
-    return [e for e in config.entries if has_session or not e.requires_session]
+def uses_sessions(entries) -> bool:
+    return any(e.requires_session or e.session_env for e in entries)
+
+
+def session_for(context: dict) -> str | None:
+    """The focused agent's session: handed down by the action, else asked of herdr."""
+    if SESSION_ENV in os.environ:
+        return os.environ[SESSION_ENV] or None
+    return agent_session(context)
+
+
+def visible_entries(config: Config, session: str | None) -> list[Entry]:
+    return [e for e in config.entries if session or not e.requires_session]
+
+
+FZF_ARGS = [
+    "--delimiter",
+    "\t",
+    "--with-nth",
+    "1",
+    "--prompt",
+    "> ",
+    "--header",
+    "select a tool (esc to cancel)",
+    "--layout",
+    "reverse",
+    "--border=none",
+    "--margin=0",
+    "--padding=0",
+    "--height",
+    "100%",
+    "--no-info",
+]
+
+
+def picker_rows(config: Config, entries: list[Entry], keys: dict[int, str]) -> list[str]:
+    color = not os.environ.get("NO_COLOR")
+    palette = palette_for(resolve_theme(config.theme))
+    return render_rows(entries, keys, palette, color=color)
+
+
+def state_dir() -> Path:
+    path = os.environ.get("HERDR_PLUGIN_STATE_DIR")
+    if path:
+        return Path(path)
+    import tempfile
+
+    return Path(tempfile.gettempdir())
+
+
+def write_rows(rows: list[str]) -> Path | None:
+    path = state_dir() / f"picker-{os.getpid()}.txt"
+    try:
+        path.write_text("".join(row + "\n" for row in rows), encoding="utf-8")
+    except OSError:
+        return None
+    return path
 
 
 def cmd_open() -> int:
+    env: dict[str, str] = {}
     try:
         config = load_config()
-        entries = visible_entries(config, plugin_context())
-        width, height = picker_size(config, slot_keys(), entries)
     except ConfigError:
-        # The picker shows the problem.
+        # The picker reads the config itself and shows the problem.
         width, height = 72, 10
-    ok, message = open_popup("picker", width, height)
+    else:
+        session = None
+        if uses_sessions(config.entries):
+            session = session_for(plugin_context())
+            env[SESSION_ENV] = session or ""
+        entries = visible_entries(config, session)
+        keys = slot_keys()
+        width, height = picker_size(config, keys, entries)
+        rows_path = write_rows(picker_rows(config, entries, keys))
+        if rows_path:
+            env[ROWS_ENV] = str(rows_path)
+    ok, message = open_popup("picker", width, height, env)
     if not ok:
+        if ROWS_ENV in env:
+            Path(env[ROWS_ENV]).unlink(missing_ok=True)
         notify(f"couldn't open the picker: {message}")
         return 1
     return 0
@@ -638,14 +713,18 @@ def cmd_slot(number: str) -> int:
     if entry is None:
         notify(f"no entry has slot = {number} in {config_path()}")
         return 1
-    if entry.requires_session and agent_session(plugin_context()) is None:
+    session = session_for(plugin_context()) if uses_sessions([entry]) else None
+    if entry.requires_session and session is None:
         notify(f"{entry.title} needs a pane running an agent session")
         return 1
-    return launch(entry)
+    return launch(entry, session)
 
 
-def launch(entry: Entry, wait: float = 0.0) -> int:
-    ok, message = open_popup("run", entry.width, entry.height, {ENTRY_ENV: entry.id}, wait=wait)
+def launch(entry: Entry, session: str | None, wait: float = 0.0) -> int:
+    env = {ENTRY_ENV: entry.id}
+    if uses_sessions([entry]):
+        env[SESSION_ENV] = session or ""
+    ok, message = open_popup("run", entry.width, entry.height, env, wait=wait)
     if not ok:
         notify(f"couldn't open {entry.title}: {message}")
         return 1
@@ -662,41 +741,40 @@ def cmd_launch(entry_id: str) -> int:
     if entry is None:
         notify(f"no entry has id = {entry_id!r}")
         return 1
-    return launch(entry, wait=POPUP_RETRY_SECONDS)
+    session = session_for(plugin_context()) if uses_sessions([entry]) else None
+    return launch(entry, session, wait=POPUP_RETRY_SECONDS)
+
+
+def read_rows() -> list[str] | None:
+    """Rows the open action rendered for this popup. The file is single-use."""
+    path = os.environ.get(ROWS_ENV)
+    if not path:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    Path(path).unlink(missing_ok=True)
+    return [row for row in text.splitlines() if row]
 
 
 def cmd_picker() -> int:
-    try:
-        config = load_config()
-    except ConfigError as err:
-        return fail_in_popup(str(err))
-
-    entries = visible_entries(config, plugin_context())
-    if not entries:
+    rows = read_rows()
+    if rows is None:
+        # Opened without the open action, so do its work here.
+        try:
+            config = load_config()
+        except ConfigError as err:
+            return fail_in_popup(str(err))
+        context = plugin_context()
+        session = session_for(context) if uses_sessions(config.entries) else None
+        entries = visible_entries(config, session)
+        rows = picker_rows(config, entries, slot_keys())
+    if not rows:
         return fail_in_popup(f"no entries to show. Add some to {config_path()}")
 
-    color = not os.environ.get("NO_COLOR")
-    palette = palette_for(resolve_theme(config.theme))
-    rows = render_rows(entries, slot_keys(), palette, color=color)
-
-    fzf_args = [
-        "fzf",
-        "--delimiter",
-        "\t",
-        "--with-nth",
-        "1",
-        "--prompt",
-        "> ",
-        "--header",
-        "select a tool (esc to cancel)",
-        "--layout",
-        "reverse",
-        "--border=none",
-        "--height",
-        "100%",
-        "--no-info",
-    ]
-    if color:
+    fzf_args = ["fzf", *FZF_ARGS]
+    if not os.environ.get("NO_COLOR"):
         fzf_args.insert(1, "--ansi")
     try:
         fzf = subprocess.run(
@@ -709,16 +787,14 @@ def cmd_picker() -> int:
         return fail_in_popup("the picker needs fzf on PATH: https://github.com/junegunn/fzf")
 
     selection = fzf.stdout.strip()
-    if not selection:
+    if "\t" not in selection:
         return 0
     entry_id = selection.rsplit("\t", 1)[-1]
-    if config.entry(entry_id) is None:
-        return 0
 
     # This popup has to close before herdr will open the next one, so hand
     # the launch to a detached helper that outlives it.
     subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "launch", entry_id],
+        [sys.executable, "-I", "-S", os.path.abspath(__file__), "launch", entry_id],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -727,11 +803,13 @@ def cmd_picker() -> int:
     return 0
 
 
-def run_environment(entry: Entry, context: dict, base: dict[str, str]) -> dict[str, str]:
+def run_environment(
+    entry: Entry, context: dict, base: dict[str, str], session: str | None = None
+) -> dict[str, str]:
     env = {
         name: value
         for name, value in base.items()
-        if not name.startswith("HERDR_PLUGIN_") and name != ENTRY_ENV
+        if not name.startswith("HERDR_PLUGIN_") and name not in PRIVATE_ENV
     }
     for name, key in (
         ("HERDR_ACTIVE_WORKSPACE_ID", "workspace_id"),
@@ -742,10 +820,8 @@ def run_environment(entry: Entry, context: dict, base: dict[str, str]) -> dict[s
         if context.get(key):
             env[name] = str(context[key])
     env.update(entry.env)
-    if entry.session_env:
-        session = agent_session(context)
-        if session:
-            env[entry.session_env] = session
+    if entry.session_env and session:
+        env[entry.session_env] = session
     return env
 
 
@@ -768,7 +844,8 @@ def cmd_run() -> int:
         return fail_in_popup(f"no entry has id = {entry_id!r}")
 
     context = plugin_context()
-    env = run_environment(entry, context, dict(os.environ))
+    session = session_for(context) if entry.session_env else None
+    env = run_environment(entry, context, dict(os.environ), session)
     cwd = run_directory(context)
     if cwd:
         os.chdir(cwd)

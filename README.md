@@ -9,7 +9,7 @@ You list the tools in a config file: lazygit, nvim, a dashboard, a script. Each 
 ## Requirements
 
 - Herdr 0.7.4 or newer, on macOS or Linux
-- Python 3.11 or newer on `PATH`. macOS's own `/usr/bin/python3` is too old; Homebrew's `python` is fine
+- Python 3.11 or newer on `PATH`. macOS's own `/usr/bin/python3` is too old; Homebrew's `python` is fine. Launchpad looks for one the first time it runs and remembers its path in the file `python` in Herdr's state directory for the plugin, usually `~/.local/state/herdr/plugins/launchpad/`. Delete that file to make it look again
 - [fzf](https://github.com/junegunn/fzf), for the picker
 - Optionally, a [Nerd Font](https://www.nerdfonts.com) for the icons in the example config. Any character or emoji works as an icon
 
@@ -263,7 +263,7 @@ To try a checkout in Herdr, uninstall any installed copy, then `herdr plugin lin
 
 The tests run the plugin the way Herdr does, through `bin/launchpad`, in a from-scratch environment: a throwaway `HOME`, no inherited `HERDR_*` variables, and stub `herdr` and `fzf` commands first on `PATH`. They never reach a running Herdr. The stub `herdr` records its arguments, so the tests check exactly which popups the plugin asks for.
 
-`bin/launchpad` is a small `sh` script that finds Python 3.11 or newer and runs `lib/launchpad.py`, which does the work.
+`bin/launchpad` is a small `sh` script that finds Python 3.11 or newer and runs `lib/launchpad.py`, which does the work. The actions do the slow parts, reading the config and asking Herdr for the agent session, before they open a popup, and hand the results over in its environment. That way a popup's process only has to start fzf or the tool, and never shows an empty frame.
 
 ## License
 

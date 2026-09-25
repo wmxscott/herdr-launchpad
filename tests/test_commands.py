@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import launchpad
 import pytest
@@ -51,7 +53,18 @@ AGENTS = [
 
 
 def pane_opens(sandbox):
-    return [call for call in sandbox.herdr_calls() if call[:3] == ["plugin", "pane", "open"]]
+    """Pane opens, with the one-off rows file path replaced by ROWS."""
+    calls = [call for call in sandbox.herdr_calls() if call[:3] == ["plugin", "pane", "open"]]
+    return [
+        ["LAUNCHPAD_ROWS=ROWS" if arg.startswith("LAUNCHPAD_ROWS=") else arg for arg in call]
+        for call in calls
+    ]
+
+
+def rows_file(sandbox):
+    [call] = sandbox.herdr_calls()
+    [path] = [arg.split("=", 1)[1] for arg in call if arg.startswith("LAUNCHPAD_ROWS=")]
+    return Path(path)
 
 
 def popup(entrypoint, width, height, *env):
@@ -65,7 +78,36 @@ def popup(entrypoint, width, height, *env):
 def test_open_sizes_the_picker(sandbox):
     sandbox.write_config(CONFIG)
     assert launchpad.main(["open"]) == 0
-    assert sandbox.herdr_calls() == [popup("picker", 36, 8)]
+    assert pane_opens(sandbox) == [
+        popup("picker", 36, 8, "LAUNCHPAD_SESSION=", "LAUNCHPAD_ROWS=ROWS")
+    ]
+
+
+def test_open_renders_the_rows_before_the_popup_opens(sandbox, monkeypatch):
+    sandbox.write_config(CONFIG)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert launchpad.main(["open"]) == 0
+    rows = rows_file(sandbox).read_text().splitlines()
+    assert rows == ["• lazygit\tlazygit", "• shell\tshell"]
+    assert rows_file(sandbox).parent == sandbox.state_dir
+
+
+def test_open_only_asks_for_a_session_when_an_entry_uses_one(sandbox, monkeypatch):
+    sandbox.write_config('[[entries]]\nid = "a"\ncommand = ["a"]\n')
+    sandbox.spec(agents=AGENTS)
+    monkeypatch.setenv("HERDR_PLUGIN_CONTEXT_JSON", json.dumps(AGENT_CONTEXT))
+    assert launchpad.main(["open"]) == 0
+    assert pane_opens(sandbox) == [popup("picker", 36, 8, "LAUNCHPAD_ROWS=ROWS")]
+
+
+def test_open_hands_the_session_to_the_picker(sandbox, monkeypatch):
+    sandbox.write_config(CONFIG)
+    sandbox.spec(agents=AGENTS)
+    monkeypatch.setenv("HERDR_PLUGIN_CONTEXT_JSON", json.dumps(AGENT_CONTEXT))
+    assert launchpad.main(["open"]) == 0
+    assert pane_opens(sandbox) == [
+        popup("picker", 36, 8, "LAUNCHPAD_SESSION=session-123", "LAUNCHPAD_ROWS=ROWS")
+    ]
 
 
 def test_open_without_config_still_opens_the_picker(sandbox):
@@ -113,7 +155,18 @@ def test_session_entry_opens_from_an_agent_pane(sandbox, monkeypatch):
     sandbox.spec(agents=AGENTS)
     monkeypatch.setenv("HERDR_PLUGIN_CONTEXT_JSON", json.dumps(AGENT_CONTEXT))
     assert launchpad.main(["slot", "2"]) == 0
-    assert pane_opens(sandbox) == [popup("run", "100%", "80%", "LAUNCHPAD_ENTRY=prs")]
+    assert pane_opens(sandbox) == [
+        popup("run", "100%", "80%", "LAUNCHPAD_ENTRY=prs", "LAUNCHPAD_SESSION=session-123")
+    ]
+
+
+def test_launch_uses_the_session_it_was_handed(sandbox, monkeypatch):
+    sandbox.write_config(CONFIG)
+    monkeypatch.setenv("LAUNCHPAD_SESSION", "from-picker")
+    assert launchpad.main(["launch", "prs"]) == 0
+    assert sandbox.herdr_calls() == [
+        popup("run", "100%", "80%", "LAUNCHPAD_ENTRY=prs", "LAUNCHPAD_SESSION=from-picker")
+    ]
 
 
 def test_launch_waits_for_the_picker_to_close(sandbox):
@@ -166,8 +219,10 @@ def test_run_environment(sandbox):
         "HERDR_PLUGIN_ID": "launchpad",
         "HERDR_PLUGIN_CONTEXT_JSON": "{}",
         "LAUNCHPAD_ENTRY": "prs",
+        "LAUNCHPAD_SESSION": "session-123",
+        "LAUNCHPAD_ROWS": "/tmp/rows",
     }
-    env = launchpad.run_environment(config.entries[0], AGENT_CONTEXT, base)
+    env = launchpad.run_environment(config.entries[0], AGENT_CONTEXT, base, "session-123")
     assert env == {
         "PATH": "/bin",
         "HERDR_ENV": "1",
@@ -329,4 +384,84 @@ def test_open_counts_only_the_entries_it_will_show(sandbox, monkeypatch):
     assert launchpad.main(["open"]) == 0
     monkeypatch.setenv("HERDR_PLUGIN_CONTEXT_JSON", json.dumps(AGENT_CONTEXT))
     assert launchpad.main(["open"]) == 0
-    assert pane_opens(sandbox) == [popup("picker", 36, 8), popup("picker", 36, 11)]
+    assert pane_opens(sandbox) == [
+        popup("picker", 36, 8, "LAUNCHPAD_SESSION=", "LAUNCHPAD_ROWS=ROWS"),
+        popup("picker", 36, 11, "LAUNCHPAD_SESSION=session-123", "LAUNCHPAD_ROWS=ROWS"),
+    ]
+
+
+def test_picker_shows_the_rows_open_rendered(sandbox, monkeypatch):
+    sandbox.write_config(CONFIG)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert launchpad.main(["open"]) == 0
+    rows = rows_file(sandbox)
+    sandbox.config_dir.joinpath("config.toml").unlink()
+    result = run_plugin(sandbox, "picker", LAUNCHPAD_ROWS=str(rows), LAUNCHPAD_SESSION="")
+    assert result.returncode == 0, result.stderr
+    assert sandbox.fzf_input.read_text().splitlines() == ["• lazygit\tlazygit", "• shell\tshell"]
+    assert not rows.exists()
+    assert len(sandbox.herdr_calls()) == 1
+
+
+def test_picker_passes_the_session_on(sandbox):
+    sandbox.write_config(CONFIG)
+    rows = sandbox.state_dir / "rows.txt"
+    rows.write_text("p\tprs\n")
+    result = run_plugin(
+        sandbox, "picker", LAUNCHPAD_ROWS=str(rows), LAUNCHPAD_SESSION="s-9", FAKE_FZF_PICK="0"
+    )
+    assert result.returncode == 0, result.stderr
+    expected = popup("run", "100%", "80%", "LAUNCHPAD_ENTRY=prs", "LAUNCHPAD_SESSION=s-9")
+    assert wait_for(lambda: expected in pane_opens(sandbox))
+    assert not [call for call in sandbox.herdr_calls() if call[:2] == ["agent", "list"]]
+
+
+@pytest.mark.parametrize(("handed", "expected"), [("s-9", "s-9"), ("", None)])
+def test_run_uses_the_session_it_was_handed(sandbox, tmp_path, handed, expected):
+    out = tmp_path / "out.json"
+    sandbox.write_config(
+        "[[entries]]\n"
+        'id = "rec"\n'
+        f"command = [{json.dumps(sys.executable)}, '-c', {json.dumps(RECORDER)}]\n"
+        f"env = {{ OUT = {json.dumps(str(out))} }}\n"
+        'session_env = "PR_TRACKER_SESSION_ID"\n'
+    )
+    sandbox.spec(agents=AGENTS)
+    result = run_plugin(
+        sandbox,
+        "run",
+        LAUNCHPAD_ENTRY="rec",
+        LAUNCHPAD_SESSION=handed,
+        HERDR_PLUGIN_CONTEXT_JSON=json.dumps(AGENT_CONTEXT),
+    )
+    assert result.returncode == 0, result.stderr
+    env = json.loads(out.read_text())["env"]
+    assert env.get("PR_TRACKER_SESSION_ID") == expected
+    assert "LAUNCHPAD_SESSION" not in env
+    assert sandbox.herdr_calls() == []
+
+
+def test_shim_caches_the_interpreter(sandbox, tmp_path):
+    cache = sandbox.state_dir / "python"
+    result = run_plugin(sandbox, "--version")
+    assert result.returncode == 0, result.stderr
+    cached = cache.read_text().strip()
+    assert Path(cached).is_absolute()
+    assert os.access(cached, os.X_OK)
+
+    marker = tmp_path / "used-cache"
+    wrapper = tmp_path / "python-wrapper"
+    wrapper.write_text(f'#!/bin/sh\ntouch {marker}\nexec {cached} "$@"\n')
+    wrapper.chmod(0o755)
+    cache.write_text(f"{wrapper}\n")
+    result = run_plugin(sandbox, "--version")
+    assert result.stdout == f"launchpad {launchpad.VERSION}\n"
+    assert marker.exists()
+
+
+def test_shim_ignores_a_stale_cache(sandbox, tmp_path):
+    cache = sandbox.state_dir / "python"
+    cache.write_text(f"{tmp_path / 'gone'}\n")
+    result = run_plugin(sandbox, "--version")
+    assert result.stdout == f"launchpad {launchpad.VERSION}\n"
+    assert cache.read_text().strip() != str(tmp_path / "gone")

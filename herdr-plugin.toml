@@ -1,6 +1,6 @@
 id = "launchpad"
 name = "Launchpad"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.7.4"
 description = "An icon picker and keybindings that open your own tools, like lazygit or nvim, in popups."
 platforms = ["linux", "macos"]

@@ -67,6 +67,7 @@ class Sandbox:
     home: Path
     bin: Path
     config_dir: Path
+    state_dir: Path
     herdr_config: Path
     herdr_log: Path
     herdr_spec: Path
@@ -102,6 +103,7 @@ class Sandbox:
             "HERDR_PLUGIN_ID": "launchpad",
             "HERDR_PLUGIN_ROOT": str(ROOT),
             "HERDR_PLUGIN_CONFIG_DIR": str(self.config_dir),
+            "HERDR_PLUGIN_STATE_DIR": str(self.state_dir),
             "FAKE_HERDR_LOG": str(self.herdr_log),
             "FAKE_HERDR_SPEC": str(self.herdr_spec),
             "FAKE_FZF_INPUT": str(self.fzf_input),
@@ -121,6 +123,8 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Sandbox:
     herdr_dir = home / ".config" / "herdr"
     config_dir = herdr_dir / "plugins" / "config" / "launchpad"
     config_dir.mkdir(parents=True)
+    state_dir = home / ".local" / "state" / "herdr" / "plugins" / "launchpad"
+    state_dir.mkdir(parents=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, script in (("herdr", FAKE_HERDR), ("fzf", FAKE_FZF)):
@@ -132,6 +136,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Sandbox:
         home=home,
         bin=bin_dir,
         config_dir=config_dir,
+        state_dir=state_dir,
         herdr_config=herdr_dir / "config.toml",
         herdr_log=tmp_path / "herdr.log",
         herdr_spec=tmp_path / "herdr-spec.json",

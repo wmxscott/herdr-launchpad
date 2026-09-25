@@ -6,6 +6,8 @@ A [Herdr](https://herdr.dev) plugin that opens your terminal tools in popups: fr
 
 You list the tools in a config file: lazygit, nvim, a dashboard, a script. Each one gets a title, an icon, a colour and a popup size. One key opens the picker, and up to nine more open a tool directly. The tool starts in the directory of the pane you were in, and the popup closes when it exits, leaving your panes as they were.
 
+![The launchpad picker: six tools with icons and their keys](docs/launchpad.png)
+
 ## Requirements
 
 - Herdr 0.7.4 or newer, on macOS or Linux
